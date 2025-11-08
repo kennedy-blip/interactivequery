@@ -1,0 +1,53 @@
+import { useState } from 'react';
+import { ArrowRight, Check, CheckCheck, Circle, CircleCheck, Code2, Copy, Database, Download, FlaskConical, KeyRound, Lightbulb, Link2, ListFilter, Search, ShieldCheck, Sparkles, Table2, TrendingUp, TriangleAlert, WandSparkles, X, Zap } from 'lucide-react';
+import { getRecommendations, hasIndex, indexScript, type Recommendation } from '../lib/analysis';
+import { getDataset, SCHEMAS, TABLE_NAMES, type Dialect, type QueryConfig, type TableName } from '../lib/database';
+import { highlightSql } from './SqlEditor';
+import { Modal } from './UI';
+
+export function OptimizerDrawer({ config, dialect, indexes, score, onApply, onClose, onCopy, onDownload }: { config: QueryConfig; dialect: Dialect; indexes: string[]; score: number; onApply: (recommendation: Recommendation) => void; onClose: () => void; onCopy: (text: string) => void; onDownload: (text: string) => void }) {
+  const recommendations = getRecommendations(config, dialect, indexes);
+  const pending = recommendations.filter(r => !r.resolved && r.table);
+  const [generatedId, setGeneratedId] = useState<string | null>(null);
+  const generated = recommendations.find(r => r.id === generatedId);
+  const potential = Math.min(99, score + pending.length * 8);
+  const checklist = [
+    { label: 'Only the columns you need', checked: !config.columns.some(c => c.column === '*') },
+    { label: 'Results bounded with a row limit', checked: config.limit >= 0 },
+    { label: 'Join relationships explicitly defined', checked: config.joins.every(j => Boolean(j.leftColumn && j.rightColumn)) },
+    { label: 'Filters narrow the data', checked: config.filters.length > 0 },
+  ];
+  function generate() { const recommendation = pending[0] || recommendations.find(r => r.table); if (recommendation) setGeneratedId(recommendation.id); }
+  return <Modal drawer title="Query optimizer" subtitle="Small changes. Meaningfully faster queries." icon={<Sparkles size={22} />} onClose={onClose} footer={<span className="drawer-safety"><ShieldCheck size={15} />Scripts are generated, never run on a real database.</span>}>
+    <div className="optimizer-intro"><span className="eyebrow"><WandSparkles size={12} /> INTELLIGENT ANALYSIS</span><h3>Make a good query<br /><span>even better.</span></h3><p>We found <strong>{pending.length ? `${pending.length} improvement${pending.length > 1 ? 's' : ''}` : 'no missing indexes'}</strong> for your {dialect} query.</p></div>
+    <div className="score-comparison"><div><span>Current score</span><strong>{score}<small>/100</small></strong></div><ArrowRight size={22} /><div><span>With recommendations</span><strong className="text-emerald-400">{potential}<small>/100</small></strong></div></div>
+    <div className="drawer-section-heading"><h3>Recommendations</h3><span className="count-badge">{recommendations.length}</span></div>
+    <div className="recommendation-list">{recommendations.map(recommendation => <article className={`recommendation-card recommendation-${recommendation.kind}`} key={recommendation.id}>
+      <div className="recommendation-title"><span className="recommendation-icon">{recommendation.resolved || recommendation.kind === 'success' ? <CircleCheck size={17} /> : recommendation.kind === 'warning' ? <TriangleAlert size={17} /> : <Zap size={17} />}</span><h4>{recommendation.title}</h4>{recommendation.resolved && <span className="tiny-badge badge-emerald">Applied</span>}</div><p>{recommendation.description}</p><div className="recommendation-impact"><TrendingUp size={13} />{recommendation.impact}</div>
+      {recommendation.table && !recommendation.resolved && <button className="text-button" onClick={() => setGeneratedId(recommendation.id)}><Code2 size={13} />{dialect === 'Snowflake' ? 'Generate clustering script' : 'Generate CREATE INDEX script'}<ArrowRight size={13} /></button>}
+    </article>)}</div>
+    {!pending.length && <div className="all-optimized"><CheckCheck size={18} /><span>All recommended indexes are available in this sandbox.</span></div>}
+    <button className="button button-primary optimizer-generate" onClick={generate} disabled={!recommendations.some(r => r.table)}><Code2 size={16} />{dialect === 'Snowflake' ? 'Generate clustering script' : 'Generate CREATE INDEX script'}</button>
+    {generated && <div className="generated-script"><div className="generated-script-heading"><span><Code2 size={14} />{dialect} script</span><button className="icon-button small" onClick={() => setGeneratedId(null)} aria-label="Close generated script"><X size={14} /></button></div><pre><code>{highlightSql(indexScript(generated, dialect))}</code></pre><div className="script-actions"><button className="button button-secondary button-small" onClick={() => onCopy(indexScript(generated, dialect))}><Copy size={13} />Copy script</button><button className="button button-secondary button-small" onClick={() => onDownload(indexScript(generated, dialect))}><Download size={13} />Download</button></div><button className="button button-success" disabled={generated.resolved} onClick={() => onApply(generated)}>{generated.resolved ? <Check size={15} /> : <FlaskConical size={15} />}{generated.resolved ? 'Applied in sandbox' : dialect === 'Snowflake' ? 'Apply clustering in sandbox' : 'Apply index in sandbox'}</button><p>Preview the impact on your execution plan. Applying here does not change a real database.</p></div>}
+    <div className="drawer-section-heading checklist-heading"><h3>Query health checklist</h3><ListFilter size={15} /></div><div className="health-checklist">{checklist.map(item => <div key={item.label} className={item.checked ? 'check-passed' : ''}>{item.checked ? <CircleCheck size={16} /> : <Circle size={16} />}<span>{item.label}</span><small>{item.checked ? 'Pass' : 'Optional'}</small></div>)}</div>
+    <details className="analysis-disclosure"><summary><Lightbulb size={14} />How recommendations are calculated</summary><p>This demo uses local, rule-based analysis of join keys, indexes, selected columns, filters, and limits. Costs, timings, and improvement percentages are illustrative estimates. Validate with EXPLAIN ANALYZE and representative data on your own database before applying scripts.</p></details>
+  </Modal>;
+}
+
+export function SchemaDrawer({ initialTable, dialect, indexes, onClose, onQuery }: { initialTable: TableName; dialect: Dialect; indexes: string[]; onClose: () => void; onQuery: (table: TableName) => void }) {
+  const [selected, setSelected] = useState<TableName>(initialTable);
+  const [search, setSearch] = useState('');
+  const schema = SCHEMAS[selected];
+  const columns = schema.columns.filter(c => `${selected}.${c.name} ${c.type}`.toLowerCase().includes(search.toLowerCase()));
+  const preview = getDataset()[selected].slice(0, 3);
+  const relationships = selected === 'users' ? ['orders.user_id → users.id', 'analytics.user_id → users.id'] : selected === 'products' ? ['orders.product_id → products.id'] : selected === 'orders' ? ['orders.user_id → users.id', 'orders.product_id → products.id'] : ['analytics.user_id → users.id'];
+  return <Modal drawer title="Schema explorer" subtitle="Four tables. A world of possible queries." icon={<Database size={21} />} onClose={onClose} footer={<button className="button button-primary w-full" onClick={() => onQuery(selected)}><Table2 size={15} />Start a query with {selected}<ArrowRight size={15} /></button>}>
+    <div className="schema-connection"><span className="connection-icon"><Database size={18} /></span><div><strong>analytics_db</strong><span>{dialect} · public schema</span></div><span className="tiny-badge badge-emerald">Sandbox</span></div>
+    <label className="search-field schema-search"><Search size={15} /><input placeholder="Find a table or column…" aria-label="Search database schema" value={search} onChange={e => setSearch(e.target.value)} />{search && <button onClick={() => setSearch('')} aria-label="Clear schema search"><X size={13} /></button>}</label>
+    <div className="schema-explorer-layout"><div className="schema-table-list"><span className="eyebrow">TABLES</span>{TABLE_NAMES.filter(table => !search || table.includes(search.toLowerCase()) || SCHEMAS[table].columns.some(c => c.name.includes(search.toLowerCase()))).map(table => <button className={selected === table ? 'active' : ''} key={table} onClick={() => setSelected(table)}><Table2 size={15} /><span>{table}<small>{SCHEMAS[table].rows.toLocaleString()} rows</small></span></button>)}{!TABLE_NAMES.some(table => !search || table.includes(search.toLowerCase()) || SCHEMAS[table].columns.some(c => c.name.includes(search.toLowerCase()))) && <p className="schema-no-results">No tables match.</p>}</div><div className="schema-column-details"><h3>{selected}<span>{schema.columns.length} columns</span></h3><p>{schema.description}</p><div className="schema-columns">{columns.map(column => <div className="schema-column" key={column.name}><div>{column.primary ? <KeyRound size={13} className="text-amber-400" /> : column.name.endsWith('_id') ? <Link2 size={13} className="text-cyan-400" /> : <span className="schema-field-dot" />}<code>{column.name}</code><span>{column.type}</span></div><p>{column.description}</p><div className="schema-column-badges">{column.primary && <span className="key-badge">PRIMARY KEY</span>}{column.name.endsWith('_id') && !column.primary && <span className="foreign-key-badge">FOREIGN KEY</span>}{hasIndex(dialect, selected, column.name, indexes) && <span className="index-badge"><Zap size={10} />{dialect === 'Snowflake' ? 'Clustering / primary key' : 'Indexed'}</span>}</div></div>)}{!columns.length && <div className="empty-state"><Search size={22} /><p>No columns match “{search}”.</p></div>}</div></div></div>
+    <div className="drawer-section-heading"><h3>Table relationships</h3><Link2 size={15} /></div><div className="schema-relationships">{relationships.map(relationship => <div key={relationship}><GitRelation /><code>{relationship}</code></div>)}</div>
+    <div className="drawer-section-heading"><h3>Sample rows</h3><span className="tiny-badge badge-neutral">Read-only preview</span></div><div className="table-scroll schema-preview"><table className="data-table"><thead><tr>{schema.columns.slice(0, 4).map(c => <th key={c.name}>{c.name}</th>)}</tr></thead><tbody>{preview.map((row, i) => <tr key={i}>{schema.columns.slice(0, 4).map(c => <td key={c.name} title={String(row[c.name])}>{row[c.name]}</td>)}</tr>)}</tbody></table></div>
+    <p className="schema-note"><ShieldCheck size={14} />Sample data is generated locally. No external database is connected.</p>
+  </Modal>;
+}
+function GitRelation() { return <Link2 size={14} className="text-cyan-400" />; }
