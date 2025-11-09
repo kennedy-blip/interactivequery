@@ -3,3 +3,4 @@ phone
 start
 fool
 op
+true
